@@ -1,0 +1,246 @@
+AWSTemplateFormatVersion: 2010-09-09
+
+Description: サンプルテンプレート
+Parameters:
+  NameBase:
+    Description: name tag value
+    Type: String
+    Default: segawa-cf
+    
+Resources:
+#VPC構築
+ myVPC:
+   Type: AWS::EC2::VPC
+   Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: segawa-cf
+#パブリックサブネットを２つ構築
+ PubSub1a:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1a
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.0.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameBase}
+ PubSub1c:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: ap-northeast-1c
+      VpcId: !Ref myVPC
+      CidrBlock: 10.0.1.0/24
+      Tags:
+        - Key: Name
+          Value: !Sub ${NameBase}
+#プライベートサブネットを２つ構築          
+ priSub1a:
+      Type: AWS::EC2::Subnet
+      Properties:
+        AvailabilityZone: ap-northeast-1a
+        VpcId: !Ref myVPC
+        CidrBlock: 10.0.2.0/24
+        Tags:
+          - Key: Name
+            Value: !Sub ${NameBase}
+ priSub1c:
+      Type: AWS::EC2::Subnet
+      Properties:
+        AvailabilityZone: ap-northeast-1c
+        VpcId: !Ref myVPC
+        CidrBlock: 10.0.3.0/24
+        Tags:
+          - Key: Name
+            Value: !Sub ${NameBase}
+#インターネットゲートウェイ構築          
+ InternetGateway:
+      Type: AWS::EC2::InternetGateway
+      Properties:
+       Tags:
+          - Key: Name
+            Value: !Sub ${NameBase}
+#アタッチゲートウェイ構築             
+ AttachGateway:
+      Type: AWS::EC2::VPCGatewayAttachment
+      Properties:
+       VpcId: !Ref myVPC
+       InternetGatewayId: !Ref InternetGateway
+#ルートテーブル構築       
+ RouteTable:
+      Type : AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref myVPC
+#ルートテーブルとパブリックサブネットを関連付ける      
+ SubneRouteTableAssociation1a:
+      Type: "AWS::EC2::SubnetRouteTableAssociation"
+      Properties:
+        RouteTableId: !Ref RouteTable
+        SubnetId: !Ref PubSub1a
+ SubneRouteTableAssociation1c:
+      Type: "AWS::EC2::SubnetRouteTableAssociation"
+      Properties:
+       RouteTableId: !Ref RouteTable
+       SubnetId: !Ref PubSub1c
+#ルート構築       
+ Route:
+      Type: "AWS::EC2::Route"
+      Properties:
+       DestinationCidrBlock: 0.0.0.0/0
+       GatewayId: !Ref InternetGateway
+       RouteTableId: !Ref RouteTable
+#EC2構築       
+ Instance:      
+      Type: AWS::EC2::Instance
+      Properties:
+       AvailabilityZone: ap-northeast-1a
+       InstanceType: t2.micro
+       ImageId: ami-0218d08a1f9dac831
+       NetworkInterfaces: 
+         - AssociatePublicIpAddress: "true"
+           DeviceIndex: "0"
+           SubnetId: !Ref PubSub1a
+           GroupSet:
+             - !Ref EC2SecurityGroup
+#EC2のセキュリティーグループ構築             
+ EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: ec2-sg-cf
+      GroupDescription: Allow SSH and HTTP access only MyIP
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        # http
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0          
+        # ssh
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+#RDSのセキュリティーグループ構築           
+ RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: rds-sg-cf
+      GroupDescription: SecurityGroup rds-grp
+      VpcId: !Ref myVPC
+      SecurityGroupIngress:
+        # RDS
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref EC2SecurityGroup
+#RDSのサブネットグループ構築          
+ DBSubnetGroup: 
+    Type: "AWS::RDS::DBSubnetGroup"
+    Properties: 
+      DBSubnetGroupName: segawa-db-sbg
+      DBSubnetGroupDescription: segawa-db-sbg
+      SubnetIds: 
+        - !Ref priSub1a
+        - !Ref priSub1c
+#RDS構築       
+ RDSInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      Engine: MySQL
+      EngineVersion: "8.0"
+      DBInstanceClass: db.t2.micro
+      AllocatedStorage: 20
+      StorageType: "gp2"
+      DBInstanceIdentifier: "segawa"
+      MasterUsername: "admin"
+      MasterUserPassword: "tomo5525"
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      PubliclyAccessible: "false"
+      AvailabilityZone: ap-northeast-1a
+      VPCSecurityGroups: 
+        - !Ref RDSSecurityGroup
+      CopyTagsToSnapshot: "true"
+      BackupRetentionPeriod: 7
+      Tags:
+         - Key: Name
+           Value: segawa-rds-cf
+#ALBセキュリティーグループ構築            
+ ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: segawa-albsg-cf
+      GroupDescription: SecurityGroup alb-grp
+      VpcId: !Ref myVPC
+      SecurityGroupIngress: 
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+         - Key: Name
+           Value: segawa-albsg-cf
+#ALBターゲットグループ構築           
+ ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties: 
+      VpcId: !Ref myVPC
+      Name: segawa-alb-tgp-cf 
+      IpAddressType: ipv4 
+      Protocol: HTTP
+      Port: 80
+      ProtocolVersion: HTTP1
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: "traffic-port"
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckIntervalSeconds: 30
+      Matcher: 
+        HttpCode: 200
+      Tags: 
+       - Key: Name
+         Value: segawa-alb-tgp-cf   
+      Targets: 
+        - Id: !Ref Instance
+          Port: 80
+#ALB構築          
+ InternetALB:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties: 
+      IpAddressType: ipv4
+      Name: segawa-alb-cf 
+      Scheme: "internet-facing"
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+      Subnets:
+         - !Ref PubSub1a
+         - !Ref PubSub1c
+      Tags: 
+         - Key: Name
+           Value: segawa-alb-cf
+#ALBリスナー構築           
+ ALBListener: 
+    Type: "AWS::ElasticLoadBalancingV2::Listener"
+    Properties: 
+      DefaultActions: 
+        - TargetGroupArn: !Ref ALBTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref InternetALB
+      Port: 80
+      Protocol: HTTP          
+
+      
+  
+
+
+      
+
+ 
+
+            
+
+
+
+
